@@ -12,8 +12,8 @@ services:
     networks:
       restricted:
         aliases:
-          # lets open-webui dial the DC's real name, so cert hostname matches
-          - "${LDAP_HOST}"
+          # Change to LDAP hostname if needed for LDAP cert
+          - ldap.server.com
       egress:
     # Optional specified DNS if required
     # dns:
@@ -39,8 +39,8 @@ services:
       # Change this for desired model
       - /tank/storage/gpu/vllm/nemotron-3.5-super.yaml:/root/config.yaml
     devices:
-      - "nvidia.com/gpu=0"
-      - "nvidia.com/gpu=1"
+      - nvidia.com/gpu=0
+      - nvidia.com/gpu=1
     healthcheck:
       test: ["CMD", "python3", "-c", "import sys,urllib.request; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=2).status == 200 else 1)"]
       interval: 30s
@@ -94,17 +94,6 @@ services:
     networks:
       - restricted
 
-  proxy:
-    image: nginx:1.27-alpine
-    restart: unless-stopped
-    depends_on:
-      - open-webui
-    ports:
-
-    volumes:
-      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
-      # optional, mount certs
-      # - ./nginx/certs:/etc/nginx/certs:ro
   proxy:
     image: jc21/nginx-proxy-manager:latest   # pin the tag you already run
     container_name: proxy
