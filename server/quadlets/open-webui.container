@@ -1,5 +1,5 @@
 [Unit]
-Requires=vllm.service
+Wants=vllm.service
 After=vllm.service
 
 [Container]
