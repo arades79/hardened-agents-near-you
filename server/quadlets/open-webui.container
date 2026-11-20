@@ -1,0 +1,12 @@
+[Unit]
+Requires=vllm.service
+After=vllm.service
+
+[Container]
+Environment=OFFLINE_MODE=true ENABLE_PERSISTENT_CONFIG=false WEBUI_URL=https://chat.example.com CORS_ALLOW_ORIGIN=https://chat.example.com ENABLE_OPENAI_API=true OPENAI_API_BASE_URL=http://vllm:8000/v1 OPENAI_API_KEY=${VLLM_API_KEY} ENABLE_LDAP=true LDAP_SERVER_HOST=${LDAP_HOST} LDAP_SERVER_PORT=${LDAP_PORT} LDAP_USE_TLS=${LDAP_USE_TLS} LDAP_VALIDATE_CERT=${LDAP_VALIDATE_CERT}
+Image=ghcr.io/open-webui/open-webui:v0.6.42
+Network=restricted.network
+Volume=./path-to-openwebui-data:/app/backend/data
+
+[Service]
+Restart=always

@@ -1,0 +1,12 @@
+[Container]
+Image=jc21/nginx-proxy-manager:latest
+Network=ingress.network
+Network=restricted.network
+PublishPort=9080:80
+PublishPort=9443:443
+PublishPort=9081:81
+Volume=./path-to-existing-config:/data
+Volume=./path-to-existing-certs:/etc/letsencrypt
+
+[Service]
+Restart=always

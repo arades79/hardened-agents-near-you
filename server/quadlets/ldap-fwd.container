@@ -1,0 +1,8 @@
+[Container]
+Exec='TCP-LISTEN:${LDAP_PORT},fork,reuseaddr' 'TCP:${LDAP_UPSTREAM}:${LDAP_PORT}'
+Image=alpine/socat:latest
+Network=restricted.network:alias=ldap.server.com
+Network=egress.network
+
+[Service]
+Restart=always

@@ -1,0 +1,17 @@
+[Container]
+Environment=HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1
+Exec='--config=/root/config.yaml' '--api-key=${VLLM_API_KEY}' '--host=0.0.0.0' '--port=8000'
+HealthCmd=["python3","-c","import sys,urllib.request; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=2).status == 200 else 1)"]
+HealthInterval=30s
+HealthRetries=3
+HealthStartPeriod=10m
+HealthTimeout=15s
+Image=vllm/vllm-openai:latest
+Network=restricted.network
+PodmanArgs=--ipc host
+Volume=/tank/storage/gpu/huggingface:/root/.cache/huggingface:ro
+Volume=./fips_enabled:/proc/sys/crypto/fips_enabled:ro
+Volume=/tank/storage/gpu/vllm/nemotron-3.5-super.yaml:/root/config.yaml
+
+[Service]
+Restart=always
