@@ -157,6 +157,12 @@ exercise everything except the attach before committing to the air gap.
 - Output panel -> **Dev Containers** shows connection steps but no download
   attempt of a server.
 
+- The container-side egress sandbox is active in both long-lived containers:
+  `podman logs agentide-devbox | grep agent-ide-sandbox` reports
+  `egress policy active` (public IP space denied, LAN reachable) - see
+  `sandbox/README.md`. The web UI keeps working because the policy accepts
+  replies to inbound connections.
+
 Closest equivalent commands, if you want to look yourself:
 
 ```sh

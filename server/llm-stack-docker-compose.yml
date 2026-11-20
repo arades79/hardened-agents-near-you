@@ -1,0 +1,134 @@
+name: llm-stack
+
+services:
+  ldap-fwd:
+    image: alpine/socat:latest
+    container_name: ldap-fwd
+    restart: unless-stopped
+    # Relay only the LDAP TCP port into restricted. More restricted egress could be added here if desired.
+    command:
+      - "TCP-LISTEN:${LDAP_PORT},fork,reuseaddr"
+      - "TCP:${LDAP_UPSTREAM}:${LDAP_PORT}"
+    networks:
+      restricted:
+        aliases:
+          # lets open-webui dial the DC's real name, so cert hostname matches
+          - "${LDAP_HOST}"
+      egress:
+    # Optional specified DNS if required
+    # dns:
+    #   - 10.0.0.53
+
+  vllm:
+    image: vllm/vllm-openai:latest
+    container_name: vllm
+    restart: unless-stopped
+    ipc: host
+    environment:
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
+    command:
+      - --config=/root/config.yaml
+      - --api-key=${VLLM_API_KEY}
+      - --host=0.0.0.0
+      - --port=8000
+    volumes:
+      - /tank/storage/gpu/huggingface:/root/.cache/huggingface:ro
+      # Make this file with `echo 0 > fips_enabled`
+      - ./fips_enabled:/proc/sys/crypto/fips_enabled:ro
+      # Change this for desired model
+      - /tank/storage/gpu/vllm/nemotron-3.5-super.yaml:/root/config.yaml
+    devices:
+      - "nvidia.com/gpu=0"
+      - "nvidia.com/gpu=1"
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import sys,urllib.request; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=2).status == 200 else 1)"]
+      interval: 30s
+      timeout: 15s
+      retries: 3
+      start_period: 600s
+    networks:
+      - restricted
+
+  open-webui:
+    image: ghcr.io/open-webui/open-webui:v0.6.42
+    restart: unless-stopped
+    depends_on:
+      vllm:
+        condition: service_started
+      # no dependency on ldap-fwd: LDAP is only touched at sign-in, not at boot
+    environment:
+      OFFLINE_MODE: "true"
+      ENABLE_PERSISTENT_CONFIG: "false"
+      WEBUI_URL: "https://chat.example.com"
+      CORS_ALLOW_ORIGIN: "https://chat.example.com"
+
+      # vllm/llamacpp connection config
+      ENABLE_OPENAI_API: "true"
+      OPENAI_API_BASE_URL: "http://vllm:8000/v1"
+      OPENAI_API_KEY: "${VLLM_API_KEY}"
+
+      # LDAP config
+      ENABLE_LDAP: "true"
+      # LDAP_SERVER_LABEL: "<whatever we use>"
+      LDAP_SERVER_HOST: "${LDAP_HOST}"
+      LDAP_SERVER_PORT: "${LDAP_PORT}"
+      LDAP_USE_TLS: "${LDAP_USE_TLS}"
+      LDAP_VALIDATE_CERT: "${LDAP_VALIDATE_CERT}"
+      # If we mount the cert below
+      # SSL_CERT_FILE: "/etc/ssl/corp/ca.pem"
+      # Unknown if rest are needed
+      # LDAP_APP_DN: "${LDAP_BIND_DN}"
+      # LDAP_APP_PASSWORD: "${LDAP_BIND_PASSWORD}"
+      # LDAP_SEARCH_BASE: "${LDAP_BASE_DN}"
+      # LDAP_ATTRIBUTE_FOR_USERNAME: "${LDAP_USERNAME_ATTRIBUTE}"
+      # LDAP_ATTRIBUTE_FOR_MAIL: "${LDAP_ATTRIBUTE_FOR_MAIL}"
+      # LDAP_SEARCH_FILTER: "${LDAP_SEARCH_FILTER}"
+      # LDAP_DEFAULT_EMAIL_DOMAIN: "${LDAP_DEFAULT_EMAIL_DOMAIN}"
+      # DEFAULT_USER_ROLE: "user"
+    volumes:
+      # change to local/bind-mount if desired
+      - openwebui-data:/app/backend/data
+      # Optional cert mounts for LDAP
+      # - ${LDAP_CA_FILE}:/etc/ssl/corp/ca.pem:ro
+    networks:
+      - restricted
+
+  proxy:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    depends_on:
+      - open-webui
+    ports:
+
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      # optional, mount certs
+      # - ./nginx/certs:/etc/nginx/certs:ro
+  proxy:
+    image: jc21/nginx-proxy-manager:latest   # pin the tag you already run
+    container_name: proxy
+    restart: unless-stopped
+    ports:
+      # Need host port forwarded to these through firewall to keep this rootless
+      - "9080:80"
+      - "9443:443"
+      - "9081:81"         # admin UI/API,
+    volumes:
+      - <path-to-existing-config>:/data
+      - <path-to-existing-certs>:/etc/letsencrypt
+    networks:
+      - ingress
+      - backend
+
+networks:
+  restricted:
+    internal: true
+  ingress:
+    driver: bridge
+  egress:
+    driver: bridge
+
+# Remove if bind-mount used
+volumes:
+  openwebui-data:

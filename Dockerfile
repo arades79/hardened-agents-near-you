@@ -97,6 +97,10 @@ ARG USER_GID=1000
 # can `dnf install` from EPEL when they are built.
 # xsv is not shipped by Rocky 9 or EPEL; add it as a static binary or from
 # source in a derived image if needed.
+# nftables provides `nft` and iproute provides `ip`; the container-side egress
+# sandbox (Tier 1b in sandbox/README.md) uses both at container start - it reads
+# the container's own routes to build its allowlist and then installs the
+# default-deny rules.
 # -----------------------------------------------------------------------------
 RUN set -eux; \
     dnf -y install --setopt=install_weak_deps=false epel-release; \
@@ -120,6 +124,8 @@ RUN set -eux; \
         glibc-langpack-en \
         ripgrep \
         fd-find \
+        iproute \
+        nftables \
         ; \
     dnf clean all; \
     rm -rf /var/cache/dnf /var/cache/yum
@@ -170,10 +176,33 @@ RUN --mount=type=bind,from=vsix,source=.,target=/tmp/vsix \
 COPY scripts/vscode-web.sh /usr/local/bin/vscode-web
 RUN chmod 0755 /usr/local/bin/vscode-web
 
+# -----------------------------------------------------------------------------
+# Container-side egress sandbox (Tier 1b in sandbox/README.md)
+#
+# The ruleset and its applier are baked in here; the entrypoint applies them on
+# every container start. They deny public IP space while keeping the LAN
+# reachable and are the only mechanism that also filters the default rootless
+# network (per-container pasta). Installing rules needs CAP_NET_ADMIN, so run
+# containers with --cap-add=NET_ADMIN; without it the entrypoint warns loudly
+# and keeps going (set AGENT_IDE_SANDBOX=require to make that fatal).
+# -----------------------------------------------------------------------------
+COPY sandbox/scripts/agent-egress-container.sh /usr/local/bin/agent-ide-sandbox
+COPY sandbox/nftables/egress-container.nft /etc/agent-ide/egress-container.nft
+RUN chmod 0755 /usr/local/bin/agent-ide-sandbox
+
+# -----------------------------------------------------------------------------
+# Entrypoint: apply the egress sandbox, then (in derived agent bundles) the
+# agent configuration, then exec the container command. The bundles set their
+# own ENTRYPOINT with the same script, so behaviour is identical everywhere.
+# -----------------------------------------------------------------------------
+COPY agents/common/entrypoint.sh /usr/local/bin/agent-ide-entrypoint
+RUN chmod 0755 /usr/local/bin/agent-ide-entrypoint
+
 USER ${USERNAME}
 WORKDIR /home/${USERNAME}
 
 # Default port used by /usr/local/bin/vscode-web.
 EXPOSE 8000
 
+ENTRYPOINT ["/usr/local/bin/agent-ide-entrypoint"]
 CMD ["/bin/bash"]

@@ -1,0 +1,40 @@
+; =============================================================================
+; agent-ide - keep the egress policy installed while the user is logged in
+; =============================================================================
+; WHY THIS EXISTS
+;   With rootless podman the policy has to live inside podman's rootless
+;   network namespace, and podman destroys that namespace as soon as nothing
+;   references it - which silently takes the policy with it (fail-open). This
+;   unit holds the namespace open and re-applies the policy on every (re)start,
+;   so the rules are in place before any container can run.
+;
+; INSTALL (EDIT THE PATH FIRST - it must point at this checkout on this host)
+;   cp sandbox/systemd/agent-egress-keeper.service ~/.config/systemd/user/
+;   systemctl --user daemon-reload
+;   systemctl --user enable --now agent-egress-keeper.service
+;   systemctl --user status agent-egress-keeper.service
+;
+; VERIFY
+;   sandbox/scripts/agent-egress-verify.sh --lan-target <nfs-server>:2049
+;   systemctl --user show agent-egress-keeper.service -p NRestarts
+;
+; If the unit is not running, container egress is unpoliced. The unit failing
+; is a signal, not a nuisance: `agent-egress-apply.sh --check` exits non-zero
+; whenever the policy is missing.
+; =============================================================================
+[Unit]
+Description=agent-ide: hold podman's rootless netns open with the container egress policy loaded
+# Do not give up after repeated failures: this is a security control, it should
+# keep retrying until the state is right (and show up as failed until then).
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+Restart=always
+RestartSec=5
+; --hold installs the policy and then keeps a process (sleep infinity) inside
+; podman's rootless netns, which is what stops podman from tearing it down.
+ExecStart=%h/projects/agent-ide/sandbox/scripts/agent-egress-apply.sh --hold
+
+[Install]
+WantedBy=default.target

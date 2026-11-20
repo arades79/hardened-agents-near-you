@@ -251,14 +251,20 @@ fi
 # ---------------------------------------------------------------------------
 step "8/9  start targets"
 podman rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
-if podman run -d --name "$CONTAINER_NAME" "$IMAGE_TAG" sleep infinity >/dev/null 2>&1; then
+# --cap-add=NET_ADMIN + AGENT_IDE_SANDBOX=require: the container installs its own
+# egress sandbox at start (public IP space denied, LAN allowed) and refuses to
+# start if that fails - so the attach target is provably not on the open network.
+# See sandbox/README.md.
+if podman run -d --name "$CONTAINER_NAME" --cap-add=NET_ADMIN \
+	-e AGENT_IDE_SANDBOX=require "$IMAGE_TAG" sleep infinity >/dev/null 2>&1; then
 	pass "container '$CONTAINER_NAME' is running (attach target)"
 else
 	fail "could not start the attach target container"
 fi
 
 podman rm -f "$WEB_CONTAINER_NAME" >/dev/null 2>&1 || true
-if podman run -d --name "$WEB_CONTAINER_NAME" -p "${WEB_PORT}:8000" "$IMAGE_TAG" vscode-web >/dev/null 2>&1; then
+if podman run -d --name "$WEB_CONTAINER_NAME" --cap-add=NET_ADMIN \
+	-e AGENT_IDE_SANDBOX=require -p "${WEB_PORT}:8000" "$IMAGE_TAG" vscode-web >/dev/null 2>&1; then
 	web_code=""
 	for _ in $(seq 1 30); do
 		web_code="$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:${WEB_PORT}/" 2>/dev/null || true)"

@@ -1,0 +1,10 @@
+# CHANGE MODEL HERE vvvvvvvvv
+model: nvidia/NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-NVFP4
+# MODEL PARAMS START
+tensor-parallel-size: 2
+gpu-memory-utilization: 0.98
+speculative_config.method: mtp
+mamba-backend: flashinfer
+enable-mamba-shard-prefix-checkpoint:
+video-pruning-rate: 0.5
+# MODEL PARAMS END

@@ -2,7 +2,13 @@
   "name": "agent-ide base (Rocky 9, air-gapped)",
   "image": "agent-ide-base:rocky9",
   "remoteUser": "vscode",
+  // The container installs its own egress sandbox rules at start (deny public
+  // IP space, keep the LAN). That needs CAP_NET_ADMIN, and "require" makes the
+  // container refuse to start if the rules cannot be installed, instead of
+  // running unprotected. See sandbox/README.md.
+  "runArgs": ["--cap-add=NET_ADMIN"],
   "containerEnv": {
-    "LANG": "en_US.UTF-8"
+    "LANG": "en_US.UTF-8",
+    "AGENT_IDE_SANDBOX": "require"
   }
 }

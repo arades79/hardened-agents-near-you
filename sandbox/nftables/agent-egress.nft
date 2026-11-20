@@ -1,0 +1,163 @@
+#!/usr/sbin/nft -f
+# =============================================================================
+# agent-ide - default-deny egress policy for agent containers
+# =============================================================================
+#
+# What this does
+# --------------
+# Containers attached to the podman networks listed in the `agent_bridges` set
+# may only send traffic to:
+#   * their own podman subnets (container <-> container, aardvark-dns, ...)
+#   * the site allowlist in `lan4` / `lan6` (your LAN: NFS, model gateway, ...)
+# Everything else - i.e. all public IP space - is logged and dropped.
+#
+# The chain hooks `forward` at priority -1, which is evaluated *before*
+# netavark's own `table inet netavark` FORWARD chain (priority 0). An `accept`
+# here is not final (netavark still gets to apply its rules), a `drop` is.
+#
+# Where this must be loaded
+# -------------------------
+# * Rootless podman: container traffic is forwarded inside podman's *rootless
+#   network namespace* (the namespace pasta attaches to), NOT in the host
+#   namespace - rules in the host namespace never see it. Use the apply script,
+#   which does the right thing for the host it runs on:
+#       sandbox/scripts/agent-egress-apply.sh
+# * Rootful podman / Docker CE: the host namespace is the right place
+#   (`nft -f - < agent-egress.nft` as root); set the bridge names accordingly
+#   (docker0, podman0, ...).
+#
+# Loading pitfalls (observed on podman 5.8 + SELinux enforcing)
+# ------------------------------------------------------------
+# * Feed this file to nft over *stdin* rather than by path when loading it
+#   inside podman's rootless netns: `podman unshare --rootless-netns nft -f
+#   <file>` can fail silently when the file's SELinux label (user_home_t for
+#   anything in a home directory) is not readable by the domain nft runs in.
+#   `podman unshare` does not reliably forward the child's stderr, so the
+#   failure looks like a no-op.
+# * podman destroys the rootless netns when nothing references it, which takes
+#   this table with it. Re-apply after every reboot and netns recreation -
+#   agent-egress-keeper.service holds the netns open and re-applies.
+# * Never trust "the command returned": read the state back
+#   (`nft list chain inet agent_egress forward`). The apply script does, and
+#   exits non-zero when the policy is not actually in place.
+#
+# This file only declares the policy. The dynamic parts - which bridges are
+# policed and which subnets belong to them - are added by the apply script in
+# the same nft transaction, so the ruleset is never active with stale or
+# missing network data.
+#
+# Verified behaviour (podman 5.8, LAN 192.168.1.0/24): with this loaded in
+# podman's rootless netns, a container on a policed bridge could no longer
+# reach 1.1.1.1 (TCP and ICMP) while 192.168.1.1 and the bridge gateway stayed
+# reachable, and the drop counter incremented. See sandbox/README.md.
+#
+# Editing the allowlist: see the "SITE POLICY" block below. Keep it as narrow
+# as the workload allows: every address you add is an exfiltration path.
+# =============================================================================
+
+table inet agent_egress {
+	# ---------------------------------------------------------- dynamic sets
+	# Populated by agent-egress-apply.sh from `podman network inspect`.
+	# Leave these empty in the file itself.
+	set agent_bridges {
+		type ifname
+	}
+	set agent_subnets4 {
+		type ipv4_addr
+		flags interval
+	}
+	set agent_subnets6 {
+		type ipv6_addr
+		flags interval
+	}
+
+	# ---------------------------------------------------------- SITE POLICY
+	# Everything the sandboxed agents may reach. RFC1918 + link-local by
+	# default; tighten to your LAN's own prefixes if you can.
+	set lan4 {
+		type ipv4_addr
+		flags interval
+		elements = {
+			10.0.0.0/8,		# RFC1918
+			172.16.0.0/12,		# RFC1918
+			192.168.0.0/16,		# RFC1918
+			169.254.0.0/16,		# link-local
+			# 100.64.0.0/10,	# CGNAT - add only if your NFS/gateway lives there
+			#		   	# (VPN overlays such as Tailscale are EXIT PATHS
+			#			# to the public internet - prefer not to add it)
+		}
+	}
+	set lan6 {
+		type ipv6_addr
+		flags interval
+		elements = {
+			fc00::/7,		# unique local addresses
+			fe80::/10,		# link-local
+		}
+	}
+
+	# Never reachable, even though the allowlist above would permit them:
+	# instance metadata services are credential theft, not "local traffic".
+	set never4 {
+		type ipv4_addr
+		flags interval
+		elements = {
+			169.254.169.254,	# AWS / GCP / Azure / OpenStack metadata
+			169.254.170.2,		# ECS task metadata
+			100.100.100.200,	# Alibaba Cloud metadata
+			168.63.129.16,		# Azure platform (DNS/health)
+			192.0.0.192,		# Oracle Cloud metadata
+		}
+	}
+	set never6 {
+		type ipv6_addr
+		flags interval
+		elements = {
+			fd00:ec2::254,		# AWS IMDSv6
+		}
+	}
+
+	# -------------------------------------------------------------- counters
+	# Named so scripts/SIEM can read them: `nft list counter inet agent_egress
+	# agent_egress_drops`. A non-zero value after an agent run is a finding.
+	counter agent_egress_drops {
+	}
+
+	# ---------------------------------------------------------------- chains
+	chain forward {
+		type filter hook forward priority -1; policy accept;
+
+		# Anti-spoof: a container may only use addresses from its own
+		# podman networks. Keeps a compromised container from borrowing the
+		# host's or a neighbour's address and confusing LAN logs/firewalls.
+		iifname @agent_bridges ip saddr != @agent_subnets4 counter drop
+		iifname @agent_bridges ip6 saddr != @agent_subnets6 counter drop
+
+		# Everything the containers send goes through the policy below.
+		# (Return traffic for inbound connections arrives on the pasta/slirp
+		# tap or the uplink, not on an agent bridge, so it is not matched.)
+		iifname @agent_bridges jump egress_policy
+	}
+
+	chain egress_policy {
+		# Replies to connections that a LAN/public peer opened towards a
+		# container (published ports) must survive the policy.
+		ct state established,related accept
+
+		# Keep the podman plumbing working: aardvark-dns and friends.
+		ip daddr @agent_subnets4 accept
+		ip6 daddr @agent_subnets6 accept
+
+		# Metadata endpoints first: the allowlist must not resurrect them.
+		ip daddr @never4 counter drop comment "cloud metadata"
+		ip6 daddr @never6 counter drop comment "cloud metadata"
+
+		# ---- the allowlist ---------------------------------------------
+		ip daddr @lan4 accept
+		ip6 daddr @lan6 accept
+
+		# ---- everything else: public IP space ---------------------------
+		log prefix "agent-egress-drop: " level warn limit rate 6/minute
+		counter name "agent_egress_drops" drop comment "default deny: destination not in allowlist"
+	}
+}

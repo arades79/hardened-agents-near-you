@@ -1,3 +1,8 @@
 .git
 .gitignore
 **/.DS_Store
+
+# Transfer bundles and installer ISOs are build outputs: keep them out of the
+# build context so image builds do not ship gigabytes to the builder.
+*.iso
+airgap-bundle/

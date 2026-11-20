@@ -39,9 +39,12 @@ desktop clients** that attach to it (image default: VS Code 1.142.0).
 | `scripts/install-vscode-server.sh` | Build-time server + CLI installer (download, verify, layout, smoke test) |
 | `scripts/install-extensions.sh` | Build-time `.vsix` installer |
 | `scripts/vscode-web.sh` | Runtime helper: serve the browser UI offline (`vscode-web`) |
+| `agents/` | Agent bundles built on this image (opencode, pi, goose, VS Code built-in agent) - see `agents/README.md` |
 | `vsix/` | Drop `.vsix` extension packages here before building |
 | `examples/.devcontainer/` | Example `devcontainer.json` for consumers of the image |
+| `examples/devcontainer-agent.json` | Example `devcontainer.json` for an agent bundle (endpoint via `containerEnv`) |
 | `testing/` | Air-gap acceptance test on a disconnected KVM VM (`testing/README.md`), bundle builder + in-VM test script |
+| `sandbox/` | Network egress sandboxing for agent containers: default-deny to public IP space, LAN allowlist, verification (`sandbox/README.md`) |
 
 ## Build
 
@@ -127,7 +130,9 @@ click per workspace).
 On the Docker host inside the isolated network:
 
 ```sh
-docker run -d --name devbox agent-ide-base:rocky9 sleep infinity
+# --cap-add=NET_ADMIN: the container installs its own egress sandbox at start
+# (public IP space denied, LAN allowed). Without it the logs warn instead.
+docker run -d --name devbox --cap-add=NET_ADMIN agent-ide-base:rocky9 sleep infinity
 ```
 
 Then in VS Code desktop: **Dev Containers: Attach to Running Container...** and
@@ -149,7 +154,7 @@ on air-gapped networks rely on the baked-in VSIX extensions instead.
 ### Browser UI, offline
 
 ```sh
-docker run --rm -p 8000:8000 agent-ide-base:rocky9 vscode-web
+docker run --rm -p 8000:8000 --cap-add=NET_ADMIN agent-ide-base:rocky9 vscode-web
 # -> http://localhost:8000/
 ```
 
@@ -174,6 +179,30 @@ extensions are visible via the server's own CLI:
 docker run --rm agent-ide-base:rocky9 \
   ~/.vscode-server/bin/*/bin/code-server --list-extensions --show-versions
 ```
+
+## Agent bundles
+
+The `agents/` directory contains feature images that use this one as their
+`FROM`: one per coding agent (opencode, pi, goose) plus one for VS Code's
+built-in agent. Each bundle installs the agent CLI and its VS Code extension
+from checksum-pinned artifacts at build time, and pre-configures the agent for
+an OpenAI-compatible endpoint taken from environment variables at container
+start.
+
+```sh
+agents/build.sh opencode        # -> agent-ide-opencode:rocky9
+
+podman run -d --name opencode-devbox \
+  -e OPENAI_BASE_URL=http://gateway.internal:8080/v1 \
+  -e OPENAI_API_KEY=sk-internal \
+  -e OPENAI_MODEL=qwen3-coder \
+  agent-ide-opencode:rocky9 sleep infinity
+```
+
+`agents/README.md` documents the environment contract, the per-bundle build
+arguments and the air-gap transfer procedure. Nothing in that layer weakens the
+offline promise: the VS Code Server, the extensions and the agent binaries are
+all baked into the image.
 
 ## Air-gap checklist
 
@@ -201,9 +230,14 @@ docker run --rm agent-ide-base:rocky9 \
   (fine for internal/corporate use, incl. this use case; not for building a
   public product or service on top of it).
 - **sudo**: the `vscode` user has passwordless sudo, matching the standard
-  devcontainer base images. Sandboxing for agent workloads (beyond the
-  container boundary itself) is a follow-up concern for images derived from
-  this one.
+  devcontainer base images. Anything *inside* the container is therefore under
+  the agent's control - network policy has to be enforced outside it. See
+  `sandbox/README.md` for the default-deny egress policy, the rootless
+  networking default that quietly bypasses it, and the verification script.
+- **Egress sandbox**: the images install a default-deny egress policy at
+  container start (`agent-ide-sandbox`) - public IP space is denied, the LAN
+  stays reachable. It needs `--cap-add=NET_ADMIN`; set
+  `AGENT_IDE_SANDBOX=require` to make a failure fatal instead of a warning.
 - **Version drift**: if clients auto-update to a newer VS Code, they will no
   longer match the baked commit and will attempt a download (which fails).
   Pin client updates on air-gapped fleets, or rebuild this image per release.
