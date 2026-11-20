@@ -6,3 +6,6 @@ Network=egress.network
 
 [Service]
 Restart=always
+
+[Install]
+WantedBy=default.target

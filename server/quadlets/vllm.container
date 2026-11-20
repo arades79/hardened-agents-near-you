@@ -17,3 +17,6 @@ Volume=/tank/storage/gpu/vllm/nemotron-3.5-super.yaml:/root/config.yaml
 
 [Service]
 Restart=always
+
+[Install]
+WantedBy=default.target
