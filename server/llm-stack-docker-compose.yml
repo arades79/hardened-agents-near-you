@@ -108,7 +108,7 @@ services:
       - <path-to-existing-certs>:/etc/letsencrypt
     networks:
       - ingress
-      - backend
+      - restricted
 
 networks:
   restricted:
@@ -117,7 +117,3 @@ networks:
     driver: bridge
   egress:
     driver: bridge
-
-# Remove if bind-mount used
-volumes:
-  openwebui-data:
